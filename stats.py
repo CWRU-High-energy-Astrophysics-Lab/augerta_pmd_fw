@@ -6,9 +6,8 @@ from datetime import date
 
 '''
 This code receives data from arduinovs.ino and interprets it and saves it in files named Hourly.csv, Daily.csv, Weekly.csv
-The variables below (baudrate, port, sensorAmount, dataInterval(sec)) should be set properly before running. Make sure to run this code
-and after this run arduinovs.ino, or you will get an exception. If you change anything in arduinovs.ino, you may have to change same parts
-of this code as well as it directly disects the data received from arduinovs.ino.
+The variables below (baudrate, port, sensorAmount, dataInterval(sec)) should be set properly before running. If you change anything in
+the input sequence, you may have to change same parts of this code as well as it directly disects the data it receives.
 '''
 
 baudrate = 115200                                                                                 #Baudrate from arduinovs.ino
@@ -21,6 +20,7 @@ DataCollection class collects the data at that moment and saves it
 '''
 class DataCollector:
   data = []                                                                                       #Empty list to write momentary data
+  checkDataList =[]                                                                               #Empty list to check the data taken
   sensorAmount = 0                                                                                #Amount of sensors in the system, set in __init__()
   ser = serial.Serial()                                                                           #The serial connection, set in __init__()
 
@@ -40,29 +40,58 @@ class DataCollector:
     daytime = today + current_time
     return daytime
 
+  def collectData(self):
+    self.checkDataList = []
+    i = 0
+    while i < 6 * sensorAmount + 1:
+      readData = self.ser.readline().decode("UTF-8")
+      if(readData!="\n"):
+        self.checkDataList.append(readData)
+        i = i + 1
+
+  def checkData(self):
+    i = 0
+    while i < 11:
+      if("Current Sensor " + str(i+1)) not in self.checkDataList[i*6+1]:
+        return False
+      if("Bus Voltage: ") not in self.checkDataList[i*6+2]:
+        return False
+      if("Shunt Voltage: ") not in self.checkDataList[i*6+3]:
+        return False
+      if("Load Voltage: ") not in self.checkDataList[i*6+4]:
+        return False
+      if("Current: ") not in self.checkDataList[i*6+5]:
+        return False
+      if("Power: ") not in self.checkDataList[i*6+6]:
+        return False
+      i = i + 1
+    return True
+
   #Parses through each sensor's data to get the information
   def parseData(self):
     self.data = []
-    readData = self.ser.readline().decode("UTF-8")
-    readData = readData.split(": ")[1]
+    self.checkDataList.reverse()
+    readData = self.checkDataList.pop()
+    readData = readData.split(": ")[1].strip()
     self.data.append("")
     self.data.append(self.getTime())
     self.data.append(readData.split("\n")[0])
     j = 0
     while j < self.sensorAmount:
       i = 0
-      while i < 7:
-        readData = self.ser.readline().decode("UTF-8")
+      while i < 6:
+        readData = self.checkDataList.pop()
         if "Current Sensor" in readData:
-          readData = readData.split(" ")[2]
+          readData = readData.split(" ")[2].strip()
           self.data.append("")
           self.data.append(readData.split(":")[0])
+          i = i + 1
         elif readData == "\n":
           pass
         else:
           readData = readData.split(": ")[1].strip()
           self.data.append(readData.split("\n")[0])
-        i = i + 1
+          i = i + 1
       j = j + 1
     print("Parsed Through Data!")
     return self.data
@@ -72,7 +101,7 @@ DataInterpreter class takes the data from the DataCollector and saves it in diff
 writes the files.
 '''
 class DataInterpreter:
-  dataInterval = 60                                                                               #Interval between all data points
+  dataInterval = 1                                                                               #Interval between all data points
   hourData = []                                                                                   #Data library for an hour
   hourptr = 0                                                                                     #Index for hour library
   dayData = []                                                                                    #Data library for a day
@@ -214,7 +243,7 @@ class DataInterpreter:
       df_list.append(df)
       dataFrame = pandas.concat(df_list)
     dataFrame.to_csv(intervalType + ".csv")
-    print("Created .csv file!")
+    print("Written into .csv file!")
 
   #Calculates and returns the average of the given data in each sensor and returns as a list
   def getAverages(self, intervalType):
@@ -288,11 +317,17 @@ while True:
     if(endTime - startTime < dataInterval):
       d.dataCollector.ser.readline()
     else:
-      lineread = d.dataCollector.ser.readline()
+      lineread = d.dataCollector.ser.readline().strip()
       if("Temp:".encode("UTF-8") in lineread):
         i = 0
-        while i < (sensorAmount * 7):
-          d.dataCollector.ser.readline()
-          i = i + 1
+        while i < (sensorAmount * 6):
+          readLine = d.dataCollector.ser.readline()
+          if(readLine.decode("UTF-8")!="\n"):
+            i = i + 1
+        d.dataCollector.collectData()
+        if(d.dataCollector.checkData()):
+          pass
+        else:
+          break
         d.getData()
         startTime = time.time()
