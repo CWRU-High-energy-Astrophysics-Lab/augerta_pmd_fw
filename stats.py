@@ -1,9 +1,9 @@
 import serial
-import pandas
+import pandas as pd
 import numpy as np
 import time
-from datetime import date
-
+import datetime 
+import os
 '''
 This code receives data from arduinovs.ino and interprets it and saves it in files named Hourly.csv, Daily.csv, Weekly.csv
 The variables below (baudrate, port, sensorAmount, dataInterval(sec)) should be set properly before running. If you change anything in
@@ -11,323 +11,65 @@ the input sequence, you may have to change same parts of this code as well as it
 '''
 
 baudrate = 115200                                                                                 #Baudrate from arduinovs.ino
-port = "COM5"                                                                                     #The port that the transmitter in connected to
+port = "/dev/ttyUSB1"                                                                                     #The port that the transmitter in connected to
 sensorAmount = 11                                                                                 #The amount of sensors connected to the transmitter
-dataInterval = 60                                                                                 #The interval between data collections
+dataInterval = 1                                                                                 #The interval between data collections
+ #Gets the time/date for use
+check=0
+current_sensor=0
+ser= serial.Serial()
+ser.baudrate = baudrate
+ser.port = port
+ser.open()
+hour_collect=[None for i in range(0,12)]
+hour_collect[0]=pd.DataFrame({'Temp':[]})
+pause=False
+for  i  in range(1,12):
+	hour_collect[i]=pd.DataFrame({"Bus":[],"Shunt":[], "Load":[],"Current":[],"Power":[]})
+ser.flush()
+while(True):
+	line=ser.readline()
+	try:
+		if b'Temp' in line:
+			#print(line[6:10])
+			hour_collect[0].loc[len(hour_collect[0].index)]=[float(line[6:10])]
+			#print(len(hour_collect[0].index))
+		
+		elif b'Current Sensor' in line:
+			current_sensor= int(line[-5:-3])
+		
+			BusV=float(ser.readline().split(b':')[1][:-3])
+			ShuntV=float(ser.readline().split(b':')[1][:-4])
+			LoadV=float(ser.readline().split(b':')[1][:-3])
+			Current=float(ser.readline().split(b':')[1][:-4])
+			Power=float(ser.readline().split(b':')[1][:-4])
+			hour_collect[current_sensor].loc[len(hour_collect[current_sensor].index)]=[BusV,ShuntV,LoadV,Current,Power]
+			#print(len(hour_collect[current_sensor].index))
+		#print(hour_collect[1].describe())
+	except:
+		pass
+	now=datetime.datetime.now()
+	if now.minute == check+1:
+		pause=False
+	if now.minute == check and pause==False:
+		pause =True
+		if now.hour == 0 or not os.path.exists(f"/home/pi/augerta_pmd_fw/FrodoPower_{now.month}_{now.day}_{now.year}"):
+			os.chdir("/home/pi/augerta_pmd_fw")
+			os.mkdir(f"FrodoPower_{now.month}_{now.day}_{now.year}")
+			os.chdir(f"FrodoPower_{now.month}_{now.day}_{now.year}")
+		os.chdir(f"/home/pi/augerta_pmd_fw/FrodoPower_{now.month}_{now.day}_{now.year}")
+		try:
+			os.mkdir("hour"+str(now.hour-1))
+		except:
+			pass
+		os.chdir("hour"+str(i))
+		for i in range(len(hour_collect)):
+			hour_collect[i].describe().to_csv("Sensor"+str(i)+".csv")
+			
 
-'''
-DataCollection class collects the data at that moment and saves it
-'''
-class DataCollector:
-  data = []                                                                                       #Empty list to write momentary data
-  checkDataList =[]                                                                               #Empty list to check the data taken
-  sensorAmount = 0                                                                                #Amount of sensors in the system, set in __init__()
-  ser = serial.Serial()                                                                           #The serial connection, set in __init__()
+		print("File Saved")
+		hour_collect=[None for i in range(0,12)]
+		hour_collect[0]=pd.DataFrame({'Temp':[]})
+		for  i  in range(1,12):
+       			 hour_collect[i]=pd.DataFrame({"Bus":[],"Shunt":[], "Load":[],"Current":[],"Power":[]})
 
-  #Initialize the serial port. Check if the port is correct
-  def __init__(self, baudrate, port, sensorAmount):
-    self.ser.baudrate = baudrate                                                                  #Sets the baudrate
-    self.ser.port = port                                                                          #Sets the port for the connection. Make sure it is set correctly
-    self.ser.open()                                                                               #Opens the connection
-    self.sensorAmount = sensorAmount                                                              #Sets the amount of sensors connected. Make sure it is set correctly
-    
-  #Gets the time/date for use
-  def getTime(self):
-    t = time.localtime()
-    current_time = time.strftime("_%H%M%S", t)
-    d = date.today()
-    today = d.strftime("%B%d%y")
-    daytime = today + current_time
-    return daytime
-
-  def collectData(self):
-    self.checkDataList = []
-    i = 0
-    while i < 6 * sensorAmount + 1:
-      readData = self.ser.readline().decode("UTF-8")
-      if(readData!="\n"):
-        self.checkDataList.append(readData)
-        i = i + 1
-
-  def checkData(self):
-    i = 0
-    while i < 11:
-      if("Current Sensor " + str(i+1)) not in self.checkDataList[i*6+1]:
-        return False
-      if("Bus Voltage: ") not in self.checkDataList[i*6+2]:
-        return False
-      if("Shunt Voltage: ") not in self.checkDataList[i*6+3]:
-        return False
-      if("Load Voltage: ") not in self.checkDataList[i*6+4]:
-        return False
-      if("Current: ") not in self.checkDataList[i*6+5]:
-        return False
-      if("Power: ") not in self.checkDataList[i*6+6]:
-        return False
-      i = i + 1
-    return True
-
-  #Parses through each sensor's data to get the information
-  def parseData(self):
-    self.data = []
-    self.checkDataList.reverse()
-    readData = self.checkDataList.pop()
-    readData = readData.split(": ")[1].strip()
-    self.data.append("")
-    self.data.append(self.getTime())
-    self.data.append(readData.split("\n")[0])
-    j = 0
-    while j < self.sensorAmount:
-      i = 0
-      while i < 6:
-        readData = self.checkDataList.pop()
-        if "Current Sensor" in readData:
-          readData = readData.split(" ")[2].strip()
-          self.data.append("")
-          self.data.append(readData.split(":")[0])
-          i = i + 1
-        elif readData == "\n":
-          pass
-        else:
-          readData = readData.split(": ")[1].strip()
-          self.data.append(readData.split("\n")[0])
-          i = i + 1
-      j = j + 1
-    print("Parsed Through Data!")
-    return self.data
-
-'''
-DataInterpreter class takes the data from the DataCollector and saves it in different intervals and calculates the statistics then
-writes the files.
-'''
-class DataInterpreter:
-  dataInterval = 1                                                                               #Interval between all data points
-  hourData = []                                                                                   #Data library for an hour
-  hourptr = 0                                                                                     #Index for hour library
-  dayData = []                                                                                    #Data library for a day
-  dayptr = 0                                                                                      #Index for day library
-  weekData = []                                                                                   #Data library for a week
-  weekptr = 0                                                                                     #Index for week library
-  #Statistic Lists for hourly record
-  hourBusVoltAv = []
-  hourShuntVoltAv = []
-  hourLoadVoltAv = []
-  hourCurrAv = []
-  hourPowAv = []
-  #Statistic Lists for daily record
-  dayBusVoltAv = []
-  dayShuntVoltAv = []
-  dayLoadVoltAv = []
-  dayCurrAv = []
-  dayPowAv = []
-  #Statistic Lists for weekly record
-  weekBusVoltAv = []
-  weekShuntVoltAv = []
-  weekLoadVoltAv = []
-  weekCurrAv = []
-  weekPowAv = []
-  #Statistic Types
-  dataTypeOne = ["", "Current sensor: ", "Bus voltage: ", "Shunt Voltage: ", "Load Voltage: ",
-                  "Current: ", "Power: "]                                                         #All repeating statistics types
-  dataType = ["", "Time: ", "Temperature: "]                                                      #The rest of the statistics types
-
-  def __init__(self, baudrate, port, sensorAmount, intervalSec):
-    self.dataCollector = DataCollector(baudrate, port, sensorAmount)
-    self.dataInterval = intervalSec
-    
-  #writes the data for week-day-hour data lists
-  def writeData(self, data):
-    #writes for an hour
-    if(len(self.hourData) < 3600/self.dataInterval):
-      self.hourData.append(data)
-      self.createFile(self.hourData, "Hourly")
-    else:
-      if(self.hourptr < len(self.hourData)-1):
-        self.hourData[self.hourptr] = data
-        self.hourptr = self.hourptr + 1
-        self.createFile(self.hourData, "Hourly")
-      else:
-        self.hourData[self.hourptr] = data
-        self.hourptr = 0
-        self.createFile(self.hourData, "Hourly")
-    
-    #writes for a day
-    if(len(self.dayData) < 86400/self.dataInterval):
-      self.dayData.append(data)
-      self.createFile(self.dayData, "Daily")
-    else:
-      if(self.dayptr < len(self.dayData)-1):
-        self.dayData[self.dayptr] = data
-        self.dayptr = self.dayptr + 1
-        self.createFile(self.dayData, "Daily")
-      else:
-        self.dayData[self.dayptr] = data
-        self.dayptr = 0
-        self.createFile(self.dayData, "Daily")
-
-    #writes for a week
-    if(len(self.weekData) < 604800/self.dataInterval):
-      self.weekData.append(data)
-      self.createFile(self.weekData, "Weekly")
-    else:
-      if(self.weekptr < len(self.weekData)-1):
-        self.weekData[self.weekptr] = data
-        self.weekptr = self.weekptr + 1
-        self.createFile(self.weekData, "Weekly")
-      else:
-        self.weekData[self.weekptr] = data
-        self.weekptr = 0
-        self.createFile(self.weekData, "Weekly")
-      
-
-  #Creates and writes the .csv file
-  def createFile(self, data, intervalType):
-    #Prepares the data types for .csv file
-    self.dataType = ["", "Time: ", "Temperature: "]
-    statDataType = ["Save Type: "]
-    statData = [intervalType]
-    calcAverages = self.getAverages(intervalType)
-    calcRanges = self.getRanges(intervalType)
-    j = 0
-    rangeIndex = 0
-    while j < self.dataCollector.sensorAmount:
-      statDataType.append("")
-      statDataType.append("Sensor" + str(j + 1) + ": ")
-      statDataType.append("Bus Voltage Average: ")
-      statDataType.append("Shunt Voltage Average: ")
-      statDataType.append("Load Voltage Average: ")
-      statDataType.append("Current Average: ")
-      statDataType.append("Power Average: ")
-      statDataType.append("Bus Voltage Range: ")
-      statDataType.append("Bus Voltage Max: ")
-      statDataType.append("Bus Voltage Min: ")
-      statDataType.append("Shunt Voltage Range: ")
-      statDataType.append("Shunt Voltage Max: ")
-      statDataType.append("Shunt Voltage Min: ")
-      statDataType.append("Load Voltage Range: ")
-      statDataType.append("Load Voltage Max: ")
-      statDataType.append("Load Voltage Min: ")
-      statDataType.append("Current Range: ")
-      statDataType.append("Current Max: ")
-      statDataType.append("Current Min: ")
-      statDataType.append("Power Range: ")
-      statDataType.append("Power Max: ")
-      statDataType.append("Power Min: ")
-      statData.append("")
-      statData.append("")
-      k = 0
-      while k < len(calcAverages):
-        statData.append(calcAverages[k][j])
-        k = k + 1
-      h = 0
-      while h < len(calcRanges):
-        statData.append(calcRanges[h][rangeIndex])
-        statData.append(calcRanges[h][rangeIndex+1])
-        statData.append(calcRanges[h][rangeIndex+2])
-        h = h + 1
-      rangeIndex = rangeIndex + 3
-      j = j + 1
-    i = 0
-    while i < self.dataCollector.sensorAmount:
-      self.dataType.extend(self.dataTypeOne)
-      i = i + 1
-    #Writes the .csv file
-    dataFrame = pandas.DataFrame({"Data Type" : statDataType, "Value" : statData})
-    for j in range(len(data)):
-      #Writes the data frame
-      dataAll = {"Data Type" : self.dataType, "Value" : data[j]}
-      df = pandas.DataFrame(data = dataAll)
-      #Merge the old and the new data frame
-      df_list = []
-      df_list.append(dataFrame)
-      df_list.append(df)
-      dataFrame = pandas.concat(df_list)
-    dataFrame.to_csv(intervalType + ".csv")
-    print("Written into .csv file!")
-
-  #Calculates and returns the average of the given data in each sensor and returns as a list
-  def getAverages(self, intervalType):
-    allAverages = []
-    if(intervalType == "Hourly"):
-      data = self.hourData
-    elif(intervalType == "Daily"):
-      data = self.dayData
-    elif(intervalType == "Weekly"):
-      data = self.weekData
-    else:
-      raise Exception("getAverages() function does not have a valid interval type set!")
-    k = 0
-    while k < 5:
-      averages = []
-      i = 0
-      while i < self.dataCollector.sensorAmount:
-        sensorData = []
-        for j in range(len(data)):
-          readData = data[j][5 + k + i * 7]
-          sensorData.append(float(readData.split(" ")[0]))
-        averages.append(np.average(sensorData))
-        i = i + 1
-      allAverages.append(averages)
-      k = k + 1
-    return allAverages
-  
-  #Calculates and returns the range of the given data in each sensor and returns a list
-  def getRanges(self, intervalType):
-    allRanges = []
-    if(intervalType == "Hourly"):
-      data = self.hourData
-    elif(intervalType == "Daily"):
-      data = self.dayData
-    elif(intervalType == "Weekly"):
-      data = self.weekData
-    else:
-      raise Exception("getRanges() function does not have a valid interval type set!")
-    k = 0
-    while k < 5:
-      ranges = []
-      i = 0
-      while i < self.dataCollector.sensorAmount:
-        sensorData = []
-        for j in range(len(data)):
-          readData = data[j][5 + k + i * 7]
-          sensorData.append(float(readData.split(" ")[0]))
-          localMax = max(sensorData)
-          localMin = min(sensorData)
-          localRange = localMax - localMin
-        ranges.append(localRange)
-        ranges.append(localMax)
-        ranges.append(localMin)
-        i = i + 1
-      allRanges.append(ranges)
-      k = k + 1
-    return allRanges
-  
-  #Function to run all other functions
-  def getData(self):
-    data = self.dataCollector.parseData()
-    self.writeData(data)
-
-#Run
-d = DataInterpreter(baudrate, port, sensorAmount, dataInterval)
-while True:
-  startTime = time.time()
-  #Makes sure the saved data is up to date
-  while True:
-    endTime = time.time()
-    if(endTime - startTime < dataInterval):
-      d.dataCollector.ser.readline()
-    else:
-      lineread = d.dataCollector.ser.readline().strip()
-      if("Temp:".encode("UTF-8") in lineread):
-        i = 0
-        while i < (sensorAmount * 6):
-          readLine = d.dataCollector.ser.readline()
-          if(readLine.decode("UTF-8")!="\n"):
-            i = i + 1
-        d.dataCollector.collectData()
-        if(d.dataCollector.checkData()):
-          pass
-        else:
-          break
-        d.getData()
-        startTime = time.time()
